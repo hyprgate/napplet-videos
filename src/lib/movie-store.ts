@@ -4,7 +4,11 @@ import type { NostrEvent, NostrFilter } from '@hyprgate/types';
 import { clientTagValue } from '@hyprgate/utils';
 
 export const NIP71_VIDEO_KINDS = [34235, 34236] as const;
-export const MOVIE_PAGE_LIMIT = 100;
+export const MOVIE_PAGE_LIMIT = 48;
+export const MOVIE_RETAINED_VIDEO_LIMIT = 192;
+export const MOVIE_RENDERED_VIDEO_LIMIT = 96;
+export const MOVIE_VISIBLE_TARGET_MAX = 20;
+export const MOVIE_LOW_VISIBLE_PAGE_LIMIT = 3;
 
 export interface VideoEntry {
   id: string;           // d-tag
@@ -28,6 +32,19 @@ export interface ContinuePagingInput extends VideoVisibilityFilter {
   visibleCount: number;
   pageEventCount: number;
   hasMore: boolean;
+}
+
+export interface VisiblePagingDecisionInput extends ContinuePagingInput {
+  lowVisiblePageStreak: number;
+  retainedVideoCount: number;
+  retainedVideoLimit?: number;
+  lowVisiblePageLimit?: number;
+}
+
+export interface VisiblePagingDecision {
+  continuePaging: boolean;
+  nextLowVisiblePageStreak: number;
+  exhaustedBySafetyCap: boolean;
 }
 
 export function isShortVideo(video: VideoEntry): boolean {
@@ -58,6 +75,22 @@ export function shouldContinuePagingForVisibleVideos(input: ContinuePagingInput)
     && input.showLongForm
     && input.visibleCount === 0
     && input.pageEventCount > 0;
+}
+
+export function getVisiblePagingDecision(input: VisiblePagingDecisionInput): VisiblePagingDecision {
+  const retainedVideoLimit = input.retainedVideoLimit ?? MOVIE_RETAINED_VIDEO_LIMIT;
+  const lowVisiblePageLimit = input.lowVisiblePageLimit ?? MOVIE_LOW_VISIBLE_PAGE_LIMIT;
+  const exhaustedBySafetyCap = input.retainedVideoCount >= retainedVideoLimit;
+  const lowVisiblePage = shouldContinuePagingForVisibleVideos(input);
+  const nextLowVisiblePageStreak = lowVisiblePage ? input.lowVisiblePageStreak + 1 : 0;
+
+  return {
+    continuePaging: lowVisiblePage
+      && !exhaustedBySafetyCap
+      && input.lowVisiblePageStreak < lowVisiblePageLimit,
+    nextLowVisiblePageStreak,
+    exhaustedBySafetyCap,
+  };
 }
 
 function firstTagValue(tags: string[][], name: string): string | undefined {
@@ -174,6 +207,12 @@ export const movieStore = {
   },
   getVideo(id: string): VideoEntry | undefined {
     return videos.get(id);
+  },
+  trimToLimit(limit: number): void {
+    if (videos.size <= limit) return;
+    for (const video of this.getVideos().slice(limit)) {
+      videos.delete(video.id);
+    }
   },
   isLoading(): boolean {
     return loading;
