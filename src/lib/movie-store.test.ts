@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   buildMoviePageFilter,
   filterVisibleVideos,
+  getVisiblePagingDecision,
   isShortVideo,
+  MOVIE_PAGE_LIMIT,
+  MOVIE_RETAINED_VIDEO_LIMIT,
   movieStore,
   parseNip71Video,
   popularHashtags,
@@ -268,6 +271,23 @@ describe('movieStore', () => {
 
     expect(movieStore.getVideos().map((video) => video.id)).toEqual(['new', 'middle', 'old']);
   });
+
+  it('trims retained videos to the newest local safety cap', () => {
+    for (let index = 0; index < MOVIE_RETAINED_VIDEO_LIMIT + 5; index++) {
+      movieStore.addVideo(parseNip71Video(makeEvent({
+        id: `event-${index}`,
+        created_at: 10_000 + index,
+        tags: [['d', `video-${index}`], ['imeta', `url https://example.com/${index}.mp4`]],
+      }))!);
+    }
+
+    movieStore.trimToLimit(MOVIE_RETAINED_VIDEO_LIMIT);
+
+    const retained = movieStore.getVideos();
+    expect(retained).toHaveLength(MOVIE_RETAINED_VIDEO_LIMIT);
+    expect(retained[0]?.id).toBe(`video-${MOVIE_RETAINED_VIDEO_LIMIT + 4}`);
+    expect(retained.some((video) => video.id === 'video-0')).toBe(false);
+  });
 });
 
 describe('movie feed helpers', () => {
@@ -301,8 +321,9 @@ describe('movie feed helpers', () => {
   });
 
   it('builds NIP-71 page filters with an until cursor for older pages', () => {
-    expect(buildMoviePageFilter()).toEqual({ kinds: [34235, 34236], limit: 100 });
-    expect(buildMoviePageFilter(1234)).toEqual({ kinds: [34235, 34236], limit: 100, until: 1234 });
+    expect(MOVIE_PAGE_LIMIT).toBeLessThan(100);
+    expect(buildMoviePageFilter()).toEqual({ kinds: [34235, 34236], limit: MOVIE_PAGE_LIMIT });
+    expect(buildMoviePageFilter(1234)).toEqual({ kinds: [34235, 34236], limit: MOVIE_PAGE_LIMIT, until: 1234 });
   });
 
   it('continues paging when long form is visible, shorts are hidden, and a batch added no visible videos', () => {
@@ -310,7 +331,7 @@ describe('movie feed helpers', () => {
       showShorts: false,
       showLongForm: true,
       visibleCount: 0,
-      pageEventCount: 100,
+      pageEventCount: MOVIE_PAGE_LIMIT,
       hasMore: true,
     })).toBe(true);
   });
@@ -320,7 +341,7 @@ describe('movie feed helpers', () => {
       showShorts: false,
       showLongForm: true,
       visibleCount: 1,
-      pageEventCount: 100,
+      pageEventCount: MOVIE_PAGE_LIMIT,
       hasMore: true,
     })).toBe(false);
     expect(shouldContinuePagingForVisibleVideos({
@@ -334,8 +355,48 @@ describe('movie feed helpers', () => {
       showShorts: false,
       showLongForm: true,
       visibleCount: 0,
-      pageEventCount: 100,
+      pageEventCount: MOVIE_PAGE_LIMIT,
       hasMore: false,
     })).toBe(false);
+  });
+
+  it('stops repeated low-yield filtered paging after the retry budget is spent', () => {
+    const first = getVisiblePagingDecision({
+      showShorts: false,
+      showLongForm: true,
+      visibleCount: 0,
+      pageEventCount: MOVIE_PAGE_LIMIT,
+      hasMore: true,
+      lowVisiblePageStreak: 0,
+      retainedVideoCount: MOVIE_PAGE_LIMIT,
+    });
+    expect(first).toMatchObject({ continuePaging: true, nextLowVisiblePageStreak: 1, exhaustedBySafetyCap: false });
+
+    const capped = getVisiblePagingDecision({
+      showShorts: false,
+      showLongForm: true,
+      visibleCount: 0,
+      pageEventCount: MOVIE_PAGE_LIMIT,
+      hasMore: true,
+      lowVisiblePageStreak: 3,
+      retainedVideoCount: MOVIE_RETAINED_VIDEO_LIMIT - 1,
+    });
+    expect(capped).toMatchObject({ continuePaging: false, nextLowVisiblePageStreak: 4, exhaustedBySafetyCap: false });
+  });
+
+  it('stops paging when the retained video safety cap is reached', () => {
+    expect(getVisiblePagingDecision({
+      showShorts: true,
+      showLongForm: true,
+      visibleCount: 20,
+      pageEventCount: MOVIE_PAGE_LIMIT,
+      hasMore: true,
+      lowVisiblePageStreak: 0,
+      retainedVideoCount: MOVIE_RETAINED_VIDEO_LIMIT,
+    })).toMatchObject({
+      continuePaging: false,
+      nextLowVisiblePageStreak: 0,
+      exhaustedBySafetyCap: true,
+    });
   });
 });

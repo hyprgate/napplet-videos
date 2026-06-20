@@ -3,6 +3,7 @@ import {
   getNextMoviePageRequest,
   isMoviePageExhausted,
   MOVIE_PAGE_EMPTY_SETTLE_TIMEOUT_MS,
+  MOVIE_PAGE_EMPTY_RETRY_LIMIT,
   MOVIE_PAGE_IDLE_SETTLE_MS,
   MOVIE_PAGE_INITIAL_SETTLE_TIMEOUT_MS,
   shouldQueueMoviePageRequest,
@@ -116,5 +117,9 @@ describe('isMoviePageExhausted', () => {
     expect(MOVIE_PAGE_EMPTY_SETTLE_TIMEOUT_MS).toBeLessThan(MOVIE_PAGE_INITIAL_SETTLE_TIMEOUT_MS);
     expect(MOVIE_PAGE_IDLE_SETTLE_MS).toBeLessThan(MOVIE_PAGE_INITIAL_SETTLE_TIMEOUT_MS);
     expect(MOVIE_PAGE_INITIAL_SETTLE_TIMEOUT_MS).toBeLessThanOrEqual(15_000);
+  });
+
+  it('exports a bounded empty-page retry limit before terminal results', () => {
+    expect(MOVIE_PAGE_EMPTY_RETRY_LIMIT).toBe(1);
   });
 });
