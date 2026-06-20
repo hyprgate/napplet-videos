@@ -5,8 +5,8 @@ import { clientTagValue } from '@hyprgate/utils';
 
 export const NIP71_VIDEO_KINDS = [34235, 34236] as const;
 export const MOVIE_PAGE_LIMIT = 48;
-export const MOVIE_RETAINED_VIDEO_LIMIT = 192;
-export const MOVIE_RENDERED_VIDEO_LIMIT = 96;
+export const MOVIE_RETAINED_VIDEO_LIMIT = 96;
+export const MOVIE_RENDERED_VIDEO_LIMIT = 48;
 export const MOVIE_VISIBLE_TARGET_MAX = 20;
 export const MOVIE_LOW_VISIBLE_PAGE_LIMIT = 3;
 

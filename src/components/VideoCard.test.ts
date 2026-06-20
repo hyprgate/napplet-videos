@@ -69,9 +69,7 @@ function compileComponentUrl(source: string, filename: string): string {
   return dataModule(rewriteCompiledImports(output.js.code));
 }
 
-const originalIntersectionObserver = globalThis.IntersectionObserver;
-
-async function loadVideoCardHarness(thumbnail: string | null = null): Promise<unknown> {
+async function loadVideoCardHarness(thumbnail: string | null = null, initialThumbnailVisible = false): Promise<unknown> {
   const cardSource = readFileSync('src/components/VideoCard.svelte', 'utf8');
   const videoCardUrl = compileComponentUrl(cardSource, 'VideoCard.svelte');
 
@@ -91,12 +89,16 @@ async function loadVideoCardHarness(thumbnail: string | null = null): Promise<un
         hashtags: []
       };
       let profile = $state(undefined);
+      let thumbnailVisible = $state(${JSON.stringify(initialThumbnailVisible)});
       export function setProfile(nextProfile) {
         profile = nextProfile;
       }
+      export function setThumbnailVisible(nextVisible) {
+        thumbnailVisible = nextVisible;
+      }
     </script>
 
-    <VideoCard {video} {profile} onselect={() => {}} />
+    <VideoCard {video} {profile} {thumbnailVisible} onselect={() => {}} />
   `;
 
   const output = compile(source, { filename: 'VideoCardHarness.svelte', generate: 'client', dev: true });
@@ -107,7 +109,6 @@ describe('VideoCard profile rendering', () => {
   afterEach(() => {
     vi.useRealTimers();
     document.body.innerHTML = '';
-    globalThis.IntersectionObserver = originalIntersectionObserver;
   });
 
   it('updates the visible author name and avatar when profile metadata arrives', async () => {
@@ -134,10 +135,9 @@ describe('VideoCard profile rendering', () => {
     unmount(component);
   });
 
-  it('falls back to immediate thumbnail rendering when IntersectionObserver is unavailable', async () => {
-    globalThis.IntersectionObserver = undefined as unknown as typeof IntersectionObserver;
+  it('renders the resource thumbnail when the parent thumbnail window marks it visible', async () => {
     const { mount, unmount } = await import(svelteClientUrl()) as typeof import('svelte');
-    const Harness = await loadVideoCardHarness('https://example.com/thumb.jpg') as Parameters<typeof mount>[0];
+    const Harness = await loadVideoCardHarness('https://example.com/thumb.jpg', true) as Parameters<typeof mount>[0];
     const component = mount(Harness, { target: document.body });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -159,9 +159,8 @@ describe('VideoCard profile rendering', () => {
 
   it('falls back to an empty thumbnail after timeout without unmounting late hydration', async () => {
     vi.useFakeTimers();
-    globalThis.IntersectionObserver = undefined as unknown as typeof IntersectionObserver;
     const { mount, unmount } = await import(svelteClientUrl()) as typeof import('svelte');
-    const Harness = await loadVideoCardHarness('https://example.com/slow-thumb.jpg') as Parameters<typeof mount>[0];
+    const Harness = await loadVideoCardHarness('https://example.com/slow-thumb.jpg', true) as Parameters<typeof mount>[0];
     const component = mount(Harness, { target: document.body });
     await Promise.resolve();
 
@@ -187,24 +186,12 @@ describe('VideoCard profile rendering', () => {
     unmount(component);
   });
 
-  it('mounts the resource thumbnail only after the card approaches the viewport', async () => {
-    let observerCallback: IntersectionObserverCallback | undefined;
-    class MockIntersectionObserver implements IntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = '0px';
-      readonly thresholds = [];
-      constructor(callback: IntersectionObserverCallback) {
-        observerCallback = callback;
-      }
-      disconnect(): void {}
-      observe(): void {}
-      takeRecords(): IntersectionObserverEntry[] { return []; }
-      unobserve(): void {}
-    }
-    globalThis.IntersectionObserver = MockIntersectionObserver as typeof IntersectionObserver;
+  it('mounts the resource thumbnail only after the parent thumbnail window includes the card', async () => {
     const { mount, unmount } = await import(svelteClientUrl()) as typeof import('svelte');
     const Harness = await loadVideoCardHarness('https://example.com/thumb.jpg') as Parameters<typeof mount>[0];
-    const component = mount(Harness, { target: document.body });
+    const component = mount(Harness, { target: document.body }) as {
+      setThumbnailVisible(nextVisible: boolean): void;
+    };
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(document.querySelector('[data-video-thumbnail]')).toBeNull();
@@ -212,7 +199,7 @@ describe('VideoCard profile rendering', () => {
       'loading',
     );
 
-    observerCallback?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    component.setThumbnailVisible(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const thumbnail = document.querySelector<HTMLImageElement>('[data-video-thumbnail]');

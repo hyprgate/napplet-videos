@@ -15,6 +15,7 @@
     playbackState?: RuntimePlayerStatus | null;
     error?: boolean;
     disabled?: boolean;
+    thumbnailVisible?: boolean;
   }
 
   let {
@@ -27,6 +28,7 @@
     playbackState = null,
     error = false,
     disabled = false,
+    thumbnailVisible = false,
   }: Props = $props();
 
   const MAX_CARD_TAGS = 4;
@@ -59,8 +61,6 @@
   let avatarColor = $derived(pubkeyReadableColor(video.pubkey));
   let avatarInitial = $derived((authorName[0] ?? '?').toUpperCase());
   let cardTags = $derived(video.hashtags.slice(0, MAX_CARD_TAGS));
-  let cardElement: HTMLDivElement | undefined = $state();
-  let thumbnailVisible = $state(false);
   let thumbnailLoadState = $state<ThumbnailLoadState>('empty');
   let thumbnailTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -97,34 +97,9 @@
 
     return clearThumbnailTimeout;
   });
-
-  $effect(() => {
-    const source = video.thumbnail;
-    const node = cardElement;
-    thumbnailVisible = false;
-    if (!source) return;
-    if (!node || typeof IntersectionObserver === 'undefined') {
-      thumbnailVisible = true;
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        thumbnailVisible = true;
-        observer.disconnect();
-      },
-      { root: null, rootMargin: '700px 0px' },
-    );
-    observer.observe(node);
-
-    return () => {
-      observer.disconnect();
-    };
-  });
 </script>
 
-<div class="card group" class:active class:error bind:this={cardElement}>
+<div class="card group" class:active class:error>
   <button
     class="thumb"
     onclick={onselect}

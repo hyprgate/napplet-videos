@@ -2,13 +2,11 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     controlRuntimePlayback,
-    preloadResourceObjectUrl,
     releaseRuntimePlayback,
     requestRuntimePlayback,
     subscribeRuntimePlayback,
     type RuntimePlayerStatus,
     type RuntimePlayerSubscription,
-    type ResourceObjectUrlSubscription,
   } from '@hyprgate/utils';
   import {
     buildMoviePageFilter,
@@ -78,10 +76,10 @@
 
   // Author profiles (kind 0), keyed by pubkey. Reassigned to trigger reactivity.
   const PROFILE_METADATA_BATCH_MS = 80;
-  const VIDEO_THUMBNAIL_PRELOAD_LIMIT = 120;
+  const THUMBNAIL_WINDOW_OVERSCAN_ROWS = 2;
+  const THUMBNAIL_WINDOW_INITIAL_COUNT = 18;
   let profiles = $state<Map<string, ProfileContent>>(new Map());
   const profileSubscriptions = new Set<Subscription>();
-  const thumbnailPreloads = new Map<string, ResourceObjectUrlSubscription>();
   const loadingProfilePubkeys = new Set<string>();
   const queuedProfilePubkeys = new Set<string>();
   let profileBatchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -128,19 +126,10 @@
     }
   }
 
-  function syncThumbnailPreloads(): void {
-    for (const video of allVideos.slice(0, VIDEO_THUMBNAIL_PRELOAD_LIMIT)) {
-      const thumbnail = video.thumbnail;
-      if (!thumbnail || thumbnailPreloads.has(thumbnail)) continue;
-      thumbnailPreloads.set(thumbnail, preloadResourceObjectUrl(thumbnail));
-    }
-  }
-
   $effect(() => {
     // Re-subscribe whenever new authors appear in the loaded set.
     void allVideos;
     syncProfileSubscription();
-    syncThumbnailPreloads();
   });
 
   let activeVideoId = $state<string | null>(null);
@@ -155,6 +144,8 @@
   let scrollContainer: HTMLDivElement | undefined = $state();
   let loadMoreSentinel: HTMLDivElement | undefined = $state();
   let observer: IntersectionObserver | null = null;
+  let thumbnailWindowStart = $state(0);
+  let thumbnailWindowEnd = $state(THUMBNAIL_WINDOW_INITIAL_COUNT);
   let oldestSeenCreatedAt: number | null = null;
   let pageRequestId = $state(0);
   let pendingPageRequest = false;
@@ -425,7 +416,33 @@
   }
 
   function handleScroll(): void {
+    updateThumbnailWindow();
     if (hasVisibleVideoType() && isNearLoadBoundary()) loadNextMoviePage();
+  }
+
+  function updateThumbnailWindow(): void {
+    const root = scrollContainer;
+    if (!root) return;
+
+    const grid = root.querySelector<HTMLElement>('.movie-grid');
+    const firstCard = grid?.querySelector<HTMLElement>('.card');
+    if (!grid || !firstCard) {
+      thumbnailWindowStart = 0;
+      thumbnailWindowEnd = Math.min(renderedVideos.length, THUMBNAIL_WINDOW_INITIAL_COUNT);
+      return;
+    }
+
+    const columns = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length);
+    const rowGap = Number.parseFloat(getComputedStyle(grid).rowGap || '0') || 0;
+    const gridTop = grid.offsetTop;
+    const rowHeight = Math.max(1, firstCard.getBoundingClientRect().height + rowGap);
+    const firstVisibleRow = Math.max(0, Math.floor((root.scrollTop - gridTop) / rowHeight) - THUMBNAIL_WINDOW_OVERSCAN_ROWS);
+    const visibleRows = Math.ceil(root.clientHeight / rowHeight) + THUMBNAIL_WINDOW_OVERSCAN_ROWS * 2;
+    const nextStart = Math.max(0, firstVisibleRow * columns);
+    const nextEnd = Math.min(renderedVideos.length, (firstVisibleRow + visibleRows) * columns);
+
+    thumbnailWindowStart = nextStart;
+    thumbnailWindowEnd = Math.max(nextEnd, Math.min(renderedVideos.length, THUMBNAIL_WINDOW_INITIAL_COUNT));
   }
 
   $effect(() => {
@@ -452,6 +469,12 @@
     };
   });
 
+  $effect(() => {
+    const renderedCount = renderedVideos.length;
+    void renderedCount;
+    window.setTimeout(updateThumbnailWindow, 0);
+  });
+
   onMount(() => {
     movieStore.reset();
     movieStore.setLoading(false);
@@ -474,8 +497,6 @@
     if (profileBatchTimer) clearTimeout(profileBatchTimer);
     for (const subscription of profileSubscriptions) subscription.close();
     profileSubscriptions.clear();
-    for (const subscription of thumbnailPreloads.values()) subscription.close();
-    thumbnailPreloads.clear();
     observer?.disconnect();
     if (pollInterval) clearInterval(pollInterval);
     void releaseCurrentRuntime();
@@ -496,6 +517,8 @@
   data-movie-page-requests={pageRequestId}
   data-movie-retained-limit={MOVIE_RETAINED_VIDEO_LIMIT}
   data-movie-rendered-limit={MOVIE_RENDERED_VIDEO_LIMIT}
+  data-movie-thumbnail-window-start={thumbnailWindowStart}
+  data-movie-thumbnail-window-end={thumbnailWindowEnd}
 >
   {#if loading && videos.length === 0}
     <div class="p-4 text-text-muted text-sm">Loading videos...</div>
@@ -571,7 +594,7 @@
       </div>
     {/if}
     <div class="movie-grid">
-      {#each renderedVideos as video (video.id)}
+      {#each renderedVideos as video, index (video.id)}
         <VideoCard
           {video}
           profile={profiles.get(video.pubkey)}
@@ -580,6 +603,7 @@
           playbackState={activeVideoId === video.id ? runtimeState : null}
           error={runtimeErrorVideoId === video.id}
           disabled={requestInFlight}
+          thumbnailVisible={index >= thumbnailWindowStart && index < thumbnailWindowEnd}
           onselect={() => { void selectVideo(video); }}
           onhashtag={toggleHashtag}
         />
@@ -695,7 +719,7 @@
   }
 
   .movie-grid {
-    --movie-card-min: clamp(280px, max(23vw, 26vh), 520px);
+    --movie-card-min: clamp(320px, max(27vw, 31vh), 640px);
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--movie-card-min)), 1fr));
     gap: 16px;
