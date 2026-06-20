@@ -23,6 +23,7 @@ export interface MoviePageSettlementInput {
 export const MOVIE_PAGE_IDLE_SETTLE_MS = 1_500;
 export const MOVIE_PAGE_EMPTY_SETTLE_TIMEOUT_MS = 3_000;
 export const MOVIE_PAGE_INITIAL_SETTLE_TIMEOUT_MS = 12_000;
+export const MOVIE_PAGE_EMPTY_RETRY_LIMIT = 1;
 
 export function shouldQueueMoviePageRequest(input: Pick<MoviePageRequestInput, 'isLoading' | 'loadingMore' | 'hasMore'>): boolean {
   return input.hasMore && (input.isLoading || input.loadingMore);

@@ -27,6 +27,7 @@
     getNextMoviePageRequest,
     isMoviePageExhausted,
     MOVIE_PAGE_EMPTY_SETTLE_TIMEOUT_MS,
+    MOVIE_PAGE_EMPTY_RETRY_LIMIT,
     MOVIE_PAGE_IDLE_SETTLE_MS,
     MOVIE_PAGE_INITIAL_SETTLE_TIMEOUT_MS,
     shouldQueueMoviePageRequest,
@@ -158,6 +159,7 @@
   let pageRequestId = $state(0);
   let pendingPageRequest = false;
   let lowVisiblePageStreak = 0;
+  let emptyPageRetryStreak = 0;
   let pageSettleTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function toggleActiveVideoPlayback(): Promise<void> {
@@ -311,14 +313,24 @@
       const loadedVideoCount = movieStore.getVideos().length;
       const effectivePageEventCount = Math.max(pageEventCount, loadedVideoCount > 0 ? 1 : 0);
 
-      if (isMoviePageExhausted({
+      const pageExhausted = isMoviePageExhausted({
         pageEventCount: effectivePageEventCount,
         oldestSeenCreatedAt: settledOldestSeenCreatedAt,
         cursorBefore,
         loadedVideoCount,
         pageLimit: MOVIE_PAGE_LIMIT,
-      })) {
+      });
+      const shouldRetryEmptyPage = pageExhausted
+        && cursorBefore !== null
+        && pageEventCount === 0
+        && loadedVideoCount > 0
+        && emptyPageRetryStreak < MOVIE_PAGE_EMPTY_RETRY_LIMIT;
+      if (shouldRetryEmptyPage) {
+        emptyPageRetryStreak++;
+      } else if (pageExhausted) {
         hasMore = false;
+      } else {
+        emptyPageRetryStreak = 0;
       }
 
       loadingMore = false;
@@ -347,7 +359,7 @@
       const shouldFollowQueuedBoundary = pendingPageRequest;
       pendingPageRequest = false;
 
-      if (hasMore && (shouldFollowQueuedBoundary || pagingDecision.continuePaging || shouldTopUpGrid)) {
+      if (hasMore && (shouldFollowQueuedBoundary || shouldRetryEmptyPage || pagingDecision.continuePaging || shouldTopUpGrid)) {
         queueMicrotask(loadNextMoviePage);
       }
     }
@@ -450,6 +462,7 @@
     pageRequestId = 0;
     pendingPageRequest = false;
     lowVisiblePageStreak = 0;
+    emptyPageRetryStreak = 0;
     loadNextMoviePage();
 
     pollInterval = setInterval(notifyUpdate, 500);
@@ -682,7 +695,7 @@
   }
 
   .movie-grid {
-    --movie-card-min: clamp(260px, 23vw, 360px);
+    --movie-card-min: clamp(280px, max(23vw, 26vh), 520px);
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--movie-card-min)), 1fr));
     gap: 16px;
