@@ -72,12 +72,12 @@ describe('subscribeProfileMetadata', () => {
     delete (globalThis as unknown as { napplet?: unknown }).napplet;
   });
 
-  it('uses a live outbox subscription so late kind-0 metadata replaces npub fallbacks', async () => {
+  it('uses an outbox subscription so late kind-0 metadata replaces npub fallbacks', async () => {
     const sub = makeOutboxSub();
     const relayClose = vi.fn();
     vi.mocked(outbox.subscribe).mockImplementation((filters, options) => {
       expect(filters).toEqual([{ kinds: [0], authors: ['pk1'], limit: 1 }]);
-      expect(options).toEqual({ strategy: 'outbox', live: true });
+      expect(options).toEqual({ strategy: 'outbox', live: false });
       return sub as unknown as ReturnType<typeof outbox.subscribe>;
     });
     vi.mocked(relay.subscribe).mockImplementation((filters) => {
@@ -91,15 +91,15 @@ describe('subscribeProfileMetadata', () => {
     await flush();
 
     expect(relay.subscribe).toHaveBeenCalledOnce();
-    sub.emit('eose');
+    sub.emit('closed');
     expect(done).toHaveBeenCalledOnce();
     expect(sub.close).not.toHaveBeenCalled();
 
-    sub.emit('event', makeProfileEvent('pk1', 100, {
+    sub.emit('event', { event: makeProfileEvent('pk1', 100, {
       name: 'alice',
       display_name: 'Alice',
       picture: 'https://example.com/alice.png',
-    }));
+    }) });
 
     expect(received).toEqual([['pk1', {
       name: 'alice',
@@ -122,19 +122,19 @@ describe('subscribeProfileMetadata', () => {
     subscribeProfileMetadata(['pk1'], (pubkey, profile) => received.push([pubkey, profile.name]));
     await flush();
 
-    sub.emit('event', makeProfileEvent('pk1', 200, { name: 'new' }));
-    sub.emit('event', makeProfileEvent('pk1', 100, { name: 'old' }));
-    sub.emit('event', makeProfileEvent('pk1', 300, '{malformed'));
+    sub.emit('event', { event: makeProfileEvent('pk1', 200, { name: 'new' }) });
+    sub.emit('event', { event: makeProfileEvent('pk1', 100, { name: 'old' }) });
+    sub.emit('event', { event: makeProfileEvent('pk1', 300, '{malformed') });
 
     expect(received).toEqual([['pk1', 'new']]);
   });
 
   it('falls back to relay.subscribe when the shell does not support outbox', async () => {
     installShell(false);
-    let onEvent: ((event: NostrEvent) => void) | undefined;
+    let onEvent: ((result: { event: NostrEvent }) => void) | undefined;
     const close = vi.fn();
     vi.mocked(relay.subscribe).mockImplementation((filters, eventCb) => {
-      onEvent = eventCb as (event: NostrEvent) => void;
+      onEvent = eventCb as (result: { event: NostrEvent }) => void;
       expect(filters).toEqual([{ kinds: [0], authors: ['pk1'], limit: 1 }]);
       return { close };
     });
@@ -145,7 +145,7 @@ describe('subscribeProfileMetadata', () => {
 
     expect(outbox.subscribe).not.toHaveBeenCalled();
     expect(relay.subscribe).toHaveBeenCalledOnce();
-    onEvent?.(makeProfileEvent('pk1', 100, { name: 'fallback' }));
+    onEvent?.({ event: makeProfileEvent('pk1', 100, { name: 'fallback' }) });
     expect(received).toEqual([['pk1', 'fallback']]);
   });
 

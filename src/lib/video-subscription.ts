@@ -31,10 +31,11 @@ export function subscribeVideoPage(
     try {
       subscriptions.push(relay.subscribe(
         filter,
-        (event) => {
+        (result) => {
+          const event = result.event as NostrEvent;
           if (seenIds.has(event.id)) return;
           seenIds.add(event.id);
-          onEvent(event as NostrEvent);
+          onEvent(event);
         },
         () => {
           remainingEose -= 1;
@@ -48,7 +49,7 @@ export function subscribeVideoPage(
   }
 
   if (subscriptions.length === 0) {
-    return relay.subscribe(filter, onEvent, onEose);
+    return relay.subscribe(filter, (result) => onEvent(result.event as NostrEvent), onEose);
   }
 
   maybeEose();

@@ -36,9 +36,9 @@ describe('subscribeVideoPage', () => {
 
   it('dedupes events delivered by multiple relays and closes every relay leg', () => {
     const closes = [vi.fn(), vi.fn()];
-    const eventCallbacks: Array<(event: NostrEvent) => void> = [];
+    const eventCallbacks: Array<(result: { event: NostrEvent }) => void> = [];
     vi.mocked(relay.subscribe).mockImplementation((_filter, onEvent) => {
-      eventCallbacks.push(onEvent as (event: NostrEvent) => void);
+      eventCallbacks.push(onEvent as (result: { event: NostrEvent }) => void);
       return { close: closes[eventCallbacks.length - 1] ?? vi.fn() };
     });
     const received: string[] = [];
@@ -50,9 +50,9 @@ describe('subscribeVideoPage', () => {
       ['wss://a.example', 'wss://b.example'],
     );
 
-    eventCallbacks[0]?.(makeEvent('event-1'));
-    eventCallbacks[1]?.(makeEvent('event-1'));
-    eventCallbacks[1]?.(makeEvent('event-2'));
+    eventCallbacks[0]?.({ event: makeEvent('event-1') });
+    eventCallbacks[1]?.({ event: makeEvent('event-1') });
+    eventCallbacks[1]?.({ event: makeEvent('event-2') });
 
     expect(received).toEqual(['event-1', 'event-2']);
     sub.close();
