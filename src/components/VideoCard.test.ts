@@ -37,12 +37,10 @@ function rewriteCompiledImports(code: string): string {
       return '#445566';
     }
   `);
-  const nostrToolsUrl = dataModule(`
-    export const nip19 = {
-      npubEncode(pubkey) {
-        return 'npub_' + String(pubkey);
-      }
-    };
+  const nip19Url = dataModule(`
+    export function npubEncode(pubkey) {
+      return 'npub_' + String(pubkey);
+    }
   `);
 
   return code
@@ -55,8 +53,8 @@ function rewriteCompiledImports(code: string): string {
       `from ${JSON.stringify(moduleUrl('svelte/internal/client'))}`,
     )
     .replace(
-      "from 'nostr-tools'",
-      `from ${JSON.stringify(nostrToolsUrl)}`,
+      "from 'nostr-tools/nip19'",
+      `from ${JSON.stringify(nip19Url)}`,
     )
     .replace(
       "from '@hyprgate/utils'",

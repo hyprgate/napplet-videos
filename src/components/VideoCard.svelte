@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { nip19 } from 'nostr-tools';
+  import * as nip19 from 'nostr-tools/nip19';
   import { resourceImage, pubkeyReadableColor } from '@hyprgate/utils';
   import type { RuntimePlayerStatus } from '@hyprgate/utils';
   import type { VideoEntry } from '../lib/movie-store.js';
