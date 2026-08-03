@@ -176,15 +176,16 @@
   </button>
 
   <div class="meta">
-    {#if profile?.picture}
-      <img
-        use:resourceImage={profile.picture}
-        alt={authorName}
-        class="avatar"
-      />
-    {:else}
+    <span class="avatar-shell">
       <span class="avatar avatar-fallback" style="background:{avatarColor}">{avatarInitial}</span>
-    {/if}
+      {#if profile?.picture}
+        <img
+          use:resourceImage={profile.picture}
+          alt={authorName}
+          class="avatar"
+        />
+      {/if}
+    </span>
     <span class="author-name">{authorName}</span>
     {#if video.client}
       <span class="client" title={'Published with ' + video.client}>{video.client}</span>
@@ -378,11 +379,19 @@
   }
 
   .avatar {
+    grid-area: 1 / 1;
     flex: none;
     width: 22px;
     height: 22px;
     border-radius: 50%;
     object-fit: cover;
+  }
+
+  .avatar-shell {
+    display: grid;
+    flex: none;
+    width: 22px;
+    height: 22px;
   }
 
   .avatar-fallback {
