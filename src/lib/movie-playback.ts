@@ -4,7 +4,7 @@ import type {
   RuntimePlaybackSource,
   RuntimePlayerControl,
 } from '@hyprgate/utils';
-import { isShortVideo, type VideoEntry } from './movie-store.js';
+import { isShortVideo, videoAddress, type VideoEntry } from './movie-store.js';
 
 export function movieVideoKind(video: VideoEntry): 'hls' | 'video' {
   return video.url.toLowerCase().includes('.m3u8') ? 'hls' : 'video';
@@ -28,25 +28,25 @@ export function buildMoviePlaybackRequest(
     url: candidate.url,
     kind: movieVideoKind(candidate),
     title: candidate.title || 'Video',
-    album: 'NIP-71 Videos',
+    album: 'Videos',
     artworkUrl: candidate.thumbnail ?? undefined,
     duration: candidate.duration ?? undefined,
     aspectRatio: movieAspectRatio(candidate),
     live: false,
     loop: isShortVideo(candidate),
     context: {
-      label: 'NIP-71 Videos',
+      label: 'Videos',
       detail: movieVideoKindLabel(candidate),
       index,
       total,
     },
   }));
-  const queueIndex = playable.findIndex((candidate) => candidate.id === video.id);
+  const queueIndex = playable.findIndex((candidate) => videoAddress(candidate) === videoAddress(video));
   const controls: RuntimePlayerControl[] = ['play', 'pause', 'stop', 'seek', 'setVolume', 'setMuted'];
   if (queue.length > 1) controls.splice(3, 0, 'prev', 'next');
 
   const context: RuntimePlaybackContext = {
-    label: 'NIP-71 Videos',
+    label: 'Videos',
     detail: movieVideoKindLabel(video),
     ...(queueIndex >= 0 ? { index: queueIndex, total } : {}),
   };
@@ -55,7 +55,7 @@ export function buildMoviePlaybackRequest(
     url: video.url,
     kind: movieVideoKind(video),
     title: video.title || 'Video',
-    album: 'NIP-71 Videos',
+    album: 'Videos',
     artworkUrl: video.thumbnail ?? undefined,
     duration: video.duration ?? undefined,
     aspectRatio: movieAspectRatio(video),

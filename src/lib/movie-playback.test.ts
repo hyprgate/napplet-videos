@@ -27,7 +27,7 @@ describe('buildMoviePlaybackRequest', () => {
       title: 'Phase 95 Movie',
       live: false,
       context: {
-        label: 'NIP-71 Videos',
+        label: 'Videos',
         detail: 'Long form',
         index: 0,
         total: 1,
@@ -39,7 +39,7 @@ describe('buildMoviePlaybackRequest', () => {
       title: 'Phase 95 Movie',
       live: false,
       context: {
-        label: 'NIP-71 Videos',
+        label: 'Videos',
         detail: 'Long form',
         index: 0,
         total: 1,

@@ -1,14 +1,15 @@
 <script lang="ts">
-  import * as nip19 from 'nostr-tools/nip19';
   import { resourceImage, pubkeyReadableColor } from '@hyprgate/utils';
   import type { RuntimePlayerStatus } from '@hyprgate/utils';
   import type { VideoEntry } from '../lib/movie-store.js';
   import type { ProfileContent } from '../lib/profile-metadata.js';
+  import { formatAge, formatDuration, npubFor, playbackLabel, shortNpub } from '../lib/video-format.js';
 
   interface Props {
     video: VideoEntry;
     onselect: () => void;
     onhashtag?: (tag: string) => void;
+    onauthor?: (pubkey: string) => void;
     profile?: ProfileContent;
     activeHashtag?: string | null;
     active?: boolean;
@@ -22,6 +23,7 @@
     video,
     onselect,
     onhashtag,
+    onauthor,
     profile,
     activeHashtag = null,
     active = false,
@@ -36,28 +38,17 @@
 
   type ThumbnailLoadState = 'loading' | 'loaded' | 'empty';
 
-  function formatDuration(seconds: number | null): string {
-    if (seconds === null) return '';
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  }
-
   function isShortVideo(): boolean {
     return video.kind === 34236 || (video.duration !== null && video.duration <= 60);
   }
 
-  function shortenPubkey(pubkey: string): string {
-    try {
-      return nip19.npubEncode(pubkey).slice(0, 10) + '…';
-    } catch {
-      return pubkey.slice(0, 8) + '…';
-    }
-  }
-
   let authorName = $derived(
-    profile?.display_name?.trim() || profile?.name?.trim() || shortenPubkey(video.pubkey),
+    profile?.display_name?.trim() || profile?.name?.trim() || shortNpub(video.pubkey),
   );
+  let authorHasName = $derived(Boolean(profile?.display_name?.trim() || profile?.name?.trim()));
+  let title = $derived(video.title.trim() || 'Untitled video');
+  let hasError = $derived(error || playbackState === 'error');
+  let stateLabel = $derived(playbackLabel(playbackState, error));
   let avatarColor = $derived(pubkeyReadableColor(video.pubkey));
   let avatarInitial = $derived((authorName[0] ?? '?').toUpperCase());
   let cardTags = $derived(video.hashtags.slice(0, MAX_CARD_TAGS));
@@ -99,13 +90,14 @@
   });
 </script>
 
-<div class="card group" class:active class:error>
+<div class="card group" class:active class:error={hasError}>
   <button
     class="thumb"
     onclick={onselect}
     {disabled}
     aria-pressed={active}
-    title={video.title || 'Untitled'}
+    aria-label={`Play ${title}`}
+    title={title}
   >
     {#if video.thumbnail && !thumbnailVisible}
       <div
@@ -119,7 +111,7 @@
     {:else if video.thumbnail}
       <img
         use:resourceImage={video.thumbnail}
-        alt={video.title || 'Video thumbnail'}
+        alt=""
         class="thumbnail-image"
         class:loaded={thumbnailLoadState === 'loaded'}
         loading="lazy"
@@ -157,36 +149,35 @@
       <div class="badge badge-short">Short</div>
     {/if}
 
-    <!-- Title bar: semi-transparent, revealed on hover/focus -->
-    <div class="title-overlay">
-      <span class="title-text">{video.title || 'Untitled'}</span>
-    </div>
-
     {#if active}
-      <div class="media-state" aria-label={playbackState ?? 'selected'}>
-        {#if error}
-          !
-        {:else if playbackState === 'playing' || playbackState === 'loading'}
-          II
-        {:else}
-          ▶
-        {/if}
+      <div class="media-state" data-playback-state={playbackState ?? 'selected'}>
+        <span class="state-pill">{stateLabel}</span>
       </div>
     {/if}
   </button>
 
+  <h3 class="video-title" class:untitled={!video.title.trim()} title={title}>{title}</h3>
+
   <div class="meta">
-    <span class="avatar-shell">
-      <span class="avatar avatar-fallback" style="background:{avatarColor}">{avatarInitial}</span>
-      {#if profile?.picture}
-        <img
-          use:resourceImage={profile.picture}
-          alt={authorName}
-          class="avatar"
-        />
-      {/if}
-    </span>
-    <span class="author-name">{authorName}</span>
+    <button
+      type="button"
+      class="author"
+      title={authorHasName ? npubFor(video.pubkey) : `Open profile for ${npubFor(video.pubkey)}`}
+      onclick={() => onauthor?.(video.pubkey)}
+    >
+      <span class="avatar-shell">
+        <span class="avatar avatar-fallback" style="background:{avatarColor}">{avatarInitial}</span>
+        {#if profile?.picture}
+          <img
+            use:resourceImage={profile.picture}
+            alt=""
+            class="avatar"
+          />
+        {/if}
+      </span>
+      <span class="author-name">{authorName}</span>
+    </button>
+    <span class="age">{formatAge(video.createdAt)}</span>
     {#if video.client}
       <span class="client" title={'Published with ' + video.client}>{video.client}</span>
     {/if}
@@ -227,6 +218,11 @@
     padding: 0;
     cursor: pointer;
     color: inherit;
+  }
+
+  .thumb:focus-visible {
+    outline: 2px solid var(--hg-accent-primary, #5d5dff);
+    outline-offset: 2px;
   }
 
   .thumb[disabled] {
@@ -292,12 +288,18 @@
     }
   }
 
+  /* An outline, because the thumbnail and its placeholder would cover an inset shadow. */
   .card.active .thumb {
-    box-shadow: inset 0 0 0 2px var(--hg-accent-primary, #5d5dff);
+    outline: 2px solid var(--hg-accent-primary, #5d5dff);
+    outline-offset: 2px;
   }
 
   .card.error .thumb {
-    box-shadow: inset 0 0 0 2px var(--hg-accent-red, #ff6b6b);
+    outline-color: var(--hg-accent-red, #ff6b6b);
+  }
+
+  .card.error .state-pill {
+    color: var(--hg-accent-red, #ff6b6b);
   }
 
   .badge {
@@ -323,59 +325,84 @@
     color: var(--hg-bg-base, #050505);
   }
 
-  .title-overlay {
+  .media-state {
     position: absolute;
-    inset-inline: 0;
-    bottom: 0;
-    padding: 16px 10px 8px;
-    background: linear-gradient(
-      to top,
-      color-mix(in srgb, var(--hg-bg-base, #050505) 92%, transparent),
-      transparent
-    );
-    opacity: 0;
-    transform: translateY(4px);
-    transition: opacity 140ms ease, transform 140ms ease;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    padding: 6px;
+    background: color-mix(in srgb, var(--hg-bg-base, #050505) 22%, transparent);
     pointer-events: none;
   }
 
-  .thumb:hover .title-overlay,
-  .thumb:focus-visible .title-overlay {
-    opacity: 1;
-    transform: translateY(0);
+  .state-pill {
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 4px 6px;
+    border-radius: 3px;
+    color: var(--hg-text-primary, #f2efe7);
+    background: color-mix(in srgb, var(--hg-bg-base, #050505) 82%, transparent);
   }
 
-  .title-text {
+  .video-title {
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    margin: 8px 8px 0;
+    font-family: var(--hg-font-body, inherit);
     font-size: 13px;
     font-weight: 600;
     line-height: 1.3;
     color: var(--hg-text-primary, #f2efe7);
-    text-shadow: 0 1px 6px #000;
   }
 
-  .media-state {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    color: var(--hg-text-primary, #f2efe7);
-    font-size: 28px;
-    font-weight: 700;
-    text-shadow: 0 2px 14px #000;
-    background: color-mix(in srgb, var(--hg-bg-base, #050505) 22%, transparent);
-    pointer-events: none;
+  .video-title.untitled {
+    font-weight: 400;
+    font-style: italic;
+    color: var(--hg-text-muted, #b8b1a4);
   }
 
   .meta {
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 7px 8px 0;
+    padding: 6px 8px 0;
     min-width: 0;
+  }
+
+  .author {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--hg-text-muted, #b8b1a4);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+
+  .author:hover .author-name {
+    color: var(--hg-text-primary, #f2efe7);
+    text-decoration: underline;
+  }
+
+  .author:focus-visible,
+  .card-tag:focus-visible {
+    outline: 2px solid var(--hg-accent-primary, #5d5dff);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  .age {
+    flex: none;
+    font-size: 11px;
+    color: var(--hg-text-muted, #b8b1a4);
+    opacity: 0.75;
   }
 
   .avatar {
@@ -409,11 +436,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 12px;
-    color: var(--hg-text-muted, #b8b1a4);
+    color: inherit;
   }
 
   .client {
     flex: none;
+    margin-left: auto;
     max-width: 40%;
     overflow: hidden;
     text-overflow: ellipsis;

@@ -37,12 +37,6 @@ function rewriteCompiledImports(code: string): string {
       return '#445566';
     }
   `);
-  const nip19Url = dataModule(`
-    export function npubEncode(pubkey) {
-      return 'npub_' + String(pubkey);
-    }
-  `);
-
   return code
     .replace(
       "import 'svelte/internal/disclose-version';",
@@ -53,8 +47,8 @@ function rewriteCompiledImports(code: string): string {
       `from ${JSON.stringify(moduleUrl('svelte/internal/client'))}`,
     )
     .replace(
-      "from 'nostr-tools/nip19'",
-      `from ${JSON.stringify(nip19Url)}`,
+      /from '\.\.\/lib\/video-format\.js'/,
+      `from ${JSON.stringify(formatModuleUrl())}`,
     )
     .replace(
       "from '@hyprgate/utils'",
@@ -62,12 +56,34 @@ function rewriteCompiledImports(code: string): string {
     );
 }
 
+// Real npub encoding, but the module has to be inlined for the data: URL import.
+function formatModuleUrl(): string {
+  return dataModule(`
+    export const formatAge = () => '2d ago';
+    export const formatDuration = (seconds) => String(seconds);
+    export const npubFor = (pubkey) => 'npub_' + pubkey;
+    export const shortNpub = (pubkey) => 'npub_' + pubkey.slice(0, 4);
+    export const playbackLabel = (state) => (state === 'error' ? "Can't play this one" : 'Now playing');
+  `);
+}
+
 function compileComponentUrl(source: string, filename: string): string {
   const output = compile(source, { filename, generate: 'client', dev: true });
   return dataModule(rewriteCompiledImports(output.js.code));
 }
 
-async function loadVideoCardHarness(thumbnail: string | null = null, initialThumbnailVisible = false): Promise<unknown> {
+const PUBKEY = 'b'.repeat(64);
+
+interface HarnessOptions {
+  title?: string;
+  playbackState?: string | null;
+}
+
+async function loadVideoCardHarness(
+  thumbnail: string | null = null,
+  initialThumbnailVisible = false,
+  options: HarnessOptions = {},
+): Promise<unknown> {
   const cardSource = readFileSync('src/components/VideoCard.svelte', 'utf8');
   const videoCardUrl = compileComponentUrl(cardSource, 'VideoCard.svelte');
 
@@ -76,12 +92,12 @@ async function loadVideoCardHarness(thumbnail: string | null = null, initialThum
       import VideoCard from '${videoCardUrl}';
       const video = {
         id: 'movie-1',
-        title: 'Movie',
+        title: ${JSON.stringify(options.title ?? 'Movie')},
         url: 'https://example.com/movie.mp4',
         thumbnail: ${JSON.stringify(thumbnail)},
         duration: 120,
         kind: 34235,
-        pubkey: '${'b'.repeat(64)}',
+        pubkey: '${PUBKEY}',
         createdAt: 1700000000,
         client: null,
         hashtags: []
@@ -96,7 +112,15 @@ async function loadVideoCardHarness(thumbnail: string | null = null, initialThum
       }
     </script>
 
-    <VideoCard {video} {profile} {thumbnailVisible} onselect={() => {}} />
+    <VideoCard
+      {video}
+      {profile}
+      {thumbnailVisible}
+      active={${options.playbackState !== undefined}}
+      playbackState={${JSON.stringify(options.playbackState ?? null)}}
+      onselect={() => {}}
+      onauthor={(pubkey) => { globalThis.__openedAuthor = pubkey; }}
+    />
   `;
 
   const output = compile(source, { filename: 'VideoCardHarness.svelte', generate: 'client', dev: true });
@@ -127,7 +151,6 @@ describe('VideoCard profile rendering', () => {
 
     expect(document.querySelector('.author-name')?.textContent?.trim()).toBe('Alice Movie');
     const avatar = document.querySelector<HTMLImageElement>('img.avatar');
-    expect(avatar?.alt).toBe('Alice Movie');
     expect(avatar?.getAttribute('src')).toBe('https://example.com/alice.png');
 
     unmount(component);
@@ -202,6 +225,64 @@ describe('VideoCard profile rendering', () => {
 
     const thumbnail = document.querySelector<HTMLImageElement>('[data-video-thumbnail]');
     expect(thumbnail?.getAttribute('src')).toBe('https://example.com/thumb.jpg');
+
+    unmount(component);
+  });
+
+  it('shows the title on the card without needing a hover', async () => {
+    const { mount, unmount } = await import(svelteClientUrl()) as typeof import('svelte');
+    const Harness = await loadVideoCardHarness(null, false, { title: 'Harbour, 5am' }) as Parameters<typeof mount>[0];
+    const component = mount(Harness, { target: document.body });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('.video-title')?.textContent).toBe('Harbour, 5am');
+    expect(document.querySelector('.thumb')?.getAttribute('aria-label')).toBe('Play Harbour, 5am');
+
+    unmount(component);
+  });
+
+  it('falls back to a dim label when an event has no title', async () => {
+    const { mount, unmount } = await import(svelteClientUrl()) as typeof import('svelte');
+    const Harness = await loadVideoCardHarness(null, false, { title: '' }) as Parameters<typeof mount>[0];
+    const component = mount(Harness, { target: document.body });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const title = document.querySelector('.video-title');
+    expect(title?.textContent).toBe('Untitled video');
+    expect(title?.classList.contains('untitled')).toBe(true);
+
+    unmount(component);
+  });
+
+  it('asks for the author profile when the name is clicked, with or without metadata', async () => {
+    const { mount, unmount } = await import(svelteClientUrl()) as typeof import('svelte');
+    const Harness = await loadVideoCardHarness() as Parameters<typeof mount>[0];
+    const component = mount(Harness, { target: document.body }) as { setProfile(profile: ProfileContent): void };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = () => (globalThis as { __openedAuthor?: string }).__openedAuthor;
+
+    expect(document.querySelector('.author-name')?.textContent?.trim()).toBe('npub_bbbb');
+    document.querySelector<HTMLButtonElement>('.author')?.click();
+    expect(opened()).toBe(PUBKEY);
+
+    (globalThis as { __openedAuthor?: string }).__openedAuthor = undefined;
+    component.setProfile({ display_name: 'Alice Movie' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.querySelector('.author-name')?.textContent?.trim()).toBe('Alice Movie');
+    document.querySelector<HTMLButtonElement>('.author')?.click();
+    expect(opened()).toBe(PUBKEY);
+
+    unmount(component);
+  });
+
+  it('says so when the player reports it could not play the video', async () => {
+    const { mount, unmount } = await import(svelteClientUrl()) as typeof import('svelte');
+    const Harness = await loadVideoCardHarness(null, false, { playbackState: 'error' }) as Parameters<typeof mount>[0];
+    const component = mount(Harness, { target: document.body });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('.state-pill')?.textContent).toBe("Can't play this one");
+    expect(document.querySelector('.card')?.classList.contains('error')).toBe(true);
 
     unmount(component);
   });

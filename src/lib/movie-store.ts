@@ -193,25 +193,34 @@ export function popularHashtags(videos: VideoEntry[], limit = 8): HashtagCount[]
     .slice(0, limit);
 }
 
+/** NIP-71 video events are addressable: the d-tag is only unique per author and kind. */
+export function videoAddress(video: Pick<VideoEntry, 'kind' | 'pubkey' | 'id'>): string {
+  return `${video.kind}:${video.pubkey}:${video.id}`;
+}
+
+// Keyed by address so two authors sharing a d-tag don't overwrite each other.
 const videos = new Map<string, VideoEntry>();
 let loading = true;
 
 export const movieStore = {
   addVideo(video: VideoEntry): boolean {
-    const existing = videos.get(video.id);
-    videos.set(video.id, video);
+    const address = videoAddress(video);
+    const existing = videos.get(address);
+    // Relays can hand back an older version of a replaced event after the new one.
+    if (existing && existing.createdAt > video.createdAt) return false;
+    videos.set(address, video);
     return existing !== video;
   },
   getVideos(): VideoEntry[] {
-    return Array.from(videos.values()).sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+    return Array.from(videos.values()).sort((a, b) => b.createdAt - a.createdAt || videoAddress(a).localeCompare(videoAddress(b)));
   },
-  getVideo(id: string): VideoEntry | undefined {
-    return videos.get(id);
+  getVideo(address: string): VideoEntry | undefined {
+    return videos.get(address);
   },
   trimToLimit(limit: number): void {
     if (videos.size <= limit) return;
     for (const video of this.getVideos().slice(limit)) {
-      videos.delete(video.id);
+      videos.delete(videoAddress(video));
     }
   },
   isLoading(): boolean {

@@ -10,6 +10,7 @@ import {
   parseNip71Video,
   popularHashtags,
   shouldContinuePagingForVisibleVideos,
+  videoAddress,
 } from './movie-store.js';
 import type { NostrEvent } from '@hyprgate/types';
 
@@ -253,7 +254,7 @@ describe('movieStore', () => {
     const video2 = parseNip71Video(updatedEvent)!;
     movieStore.addVideo(video2);
 
-    const found = movieStore.getVideo('video-1');
+    const found = movieStore.getVideo(videoAddress(video1));
     expect(found!.title).toBe('Updated Video');
   });
 
@@ -262,6 +263,26 @@ describe('movieStore', () => {
     expect(movieStore.isLoading()).toBe(false);
     movieStore.setLoading(true);
     expect(movieStore.isLoading()).toBe(true);
+  });
+
+  it('keeps two authors who reuse the same d-tag', () => {
+    const tags = [['d', 'clip'], ['imeta', 'url https://example.com/clip.mp4']];
+    movieStore.addVideo(parseNip71Video(makeEvent({ id: 'a', pubkey: 'a'.repeat(64), tags }))!);
+    movieStore.addVideo(parseNip71Video(makeEvent({ id: 'b', pubkey: 'b'.repeat(64), tags }))!);
+
+    expect(movieStore.getVideos().map((video) => video.pubkey).sort()).toEqual(['a'.repeat(64), 'b'.repeat(64)]);
+  });
+
+  it('keeps the newest version when a relay replays an older one', () => {
+    const version = (createdAt: number, title: string) => parseNip71Video(makeEvent({
+      id: title,
+      created_at: createdAt,
+      tags: [['d', 'clip'], ['title', title], ['imeta', 'url https://example.com/clip.mp4']],
+    }))!;
+    movieStore.addVideo(version(2000, 'newer'));
+    movieStore.addVideo(version(1000, 'older'));
+
+    expect(movieStore.getVideos().map((video) => video.title)).toEqual(['newer']);
   });
 
   it('getVideos sorts by newest createdAt first', () => {

@@ -2,6 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     controlRuntimePlayback,
+    createProfileIntentRequest,
+    invokeNappletIntent,
     releaseRuntimePlayback,
     requestRuntimePlayback,
     subscribeRuntimePlayback,
@@ -12,7 +14,6 @@
     buildMoviePageFilter,
     filterVisibleVideos,
     getVisiblePagingDecision,
-    isShortVideo,
     MOVIE_PAGE_LIMIT,
     MOVIE_RENDERED_VIDEO_LIMIT,
     MOVIE_RETAINED_VIDEO_LIMIT,
@@ -20,6 +21,7 @@
     movieStore,
     parseNip71Video,
     popularHashtags,
+    videoAddress,
   } from './lib/movie-store.js';
   import {
     getNextMoviePageRequest,
@@ -31,6 +33,7 @@
     shouldQueueMoviePageRequest,
   } from './lib/movie-pagination.js';
   import { buildMoviePlaybackRequest } from './lib/movie-playback.js';
+  import { playbackNeverStarted } from './lib/video-format.js';
   import { subscribeProfileMetadata, type ProfileContent } from './lib/profile-metadata.js';
   import { subscribeVideoPage } from './lib/video-subscription.js';
   import VideoCard from './components/VideoCard.svelte';
@@ -73,6 +76,9 @@
   let loading = $derived.by(() => { version; return movieStore.isLoading(); });
   let loadingMore = $state(false);
   let hasMore = $state(true);
+  let lengthFilter = $derived<'all' | 'short' | 'long'>(
+    showShorts && showLongForm ? 'all' : showShorts ? 'short' : 'long',
+  );
 
   // Author profiles (kind 0), keyed by pubkey. Reassigned to trigger reactivity.
   const PROFILE_METADATA_BATCH_MS = 80;
@@ -155,6 +161,7 @@
 
   async function toggleActiveVideoPlayback(): Promise<void> {
     if (!runtimeSessionId) return;
+    runtimeErrorVideoId = null;
     const action = runtimeState === 'playing' || runtimeState === 'loading' ? 'pause' : 'play';
     try {
       const state = await controlRuntimePlayback(runtimeSessionId, action);
@@ -180,14 +187,15 @@
 
   async function selectVideo(video: VideoEntry): Promise<void> {
     if (requestInFlight) return;
-    if (activeVideoId === video.id && runtimeSessionId) {
+    const address = videoAddress(video);
+    if (activeVideoId === address && runtimeSessionId) {
       await toggleActiveVideoPlayback();
       return;
     }
 
     requestInFlight = true;
     runtimeErrorVideoId = null;
-    activeVideoId = video.id;
+    activeVideoId = address;
     runtimeState = 'loading';
     runtimeSubscription?.close();
     runtimeSubscription = null;
@@ -199,6 +207,9 @@
       const sessionId = result.sessionId;
       runtimeSubscription = subscribeRuntimePlayback(sessionId, (state) => {
         if (runtimeSessionId !== sessionId) return;
+        if (playbackNeverStarted(runtimeState, state?.state ?? null) && activeVideoId) {
+          runtimeErrorVideoId = activeVideoId;
+        }
         if (!state) {
           activeVideoId = null;
           runtimeState = null;
@@ -210,7 +221,7 @@
         runtimeState = state.state;
       });
     } catch (error) {
-      runtimeErrorVideoId = video.id;
+      runtimeErrorVideoId = address;
       runtimeState = 'error';
       console.warn('[movie] player.requestPlayback failed', error);
     } finally {
@@ -386,17 +397,18 @@
     if (wantsLongFormSearch()) loadNextMoviePage();
   }
 
-  function setShortsVisible(next: boolean): void {
-    // At least one of Shorts / Long form must stay active.
-    if (!next && !showLongForm) return;
-    showShorts = next;
+  function setLengthFilter(next: 'all' | 'short' | 'long'): void {
+    showShorts = next !== 'long';
+    showLongForm = next !== 'short';
     ensureVisibleVideos();
   }
 
-  function setLongFormVisible(next: boolean): void {
-    if (!next && !showShorts) return;
-    showLongForm = next;
-    ensureVisibleVideos();
+  function openAuthor(pubkey: string): void {
+    const request = createProfileIntentRequest({ pubkey });
+    if (!request) return;
+    void invokeNappletIntent(request).catch((error) => {
+      console.warn('[movie] profile open failed', error);
+    });
   }
 
   function setNsfwVisible(next: boolean): void {
@@ -520,19 +532,33 @@
   data-movie-thumbnail-window-start={thumbnailWindowStart}
   data-movie-thumbnail-window-end={thumbnailWindowEnd}
 >
-  {#if loading && videos.length === 0}
-    <div class="p-4 text-text-muted text-sm">Loading videos...</div>
+  {#if loading && allVideos.length === 0}
+    <div class="movie-grid" aria-busy="true" aria-label="Loading videos" data-movie-skeleton>
+      {#each { length: 6 } as _}
+        <div class="skeleton-card" aria-hidden="true">
+          <div class="skeleton-thumb"></div>
+          <div class="skeleton-line wide"></div>
+          <div class="skeleton-line"></div>
+        </div>
+      {/each}
+    </div>
   {:else if !loading && allVideos.length === 0}
-    <div class="p-4 text-text-muted text-sm">No videos found</div>
+    <div class="empty-state" data-movie-empty>
+      <p class="empty-title">No videos yet</p>
+      <p class="empty-copy">Your relays didn't return any videos. New ones will show up here as they arrive.</p>
+    </div>
   {:else}
     <header class="header-bar">
       <div class="header-info">
         <span class="video-count">
-          {videos.length}
-          {videos.length === 1 ? 'video' : 'videos'}
+          {#if videos.length === allVideos.length}
+            {videos.length} {videos.length === 1 ? 'video' : 'videos'}
+          {:else}
+            {videos.length} of {allVideos.length} videos
+          {/if}
         </span>
         {#if topHashtags.length > 0}
-          <span class="hashtags">
+          <div class="hashtags" role="group" aria-label="Filter by topic">
             {#each topHashtags as { tag } (tag)}
               <button
                 type="button"
@@ -542,70 +568,73 @@
                 onclick={() => { toggleHashtag(tag); }}
               >#{tag}</button>
             {/each}
-          </span>
+          </div>
         {/if}
         {#if activeHashtag !== null}
           <button type="button" class="clear-filter" onclick={clearHashtagFilter}>
-            Clear ✕
+            Clear topic
           </button>
         {/if}
       </div>
       <div class="header-toggles">
+        <div class="segmented" role="group" aria-label="Video length" data-video-length={lengthFilter}>
+          {#each [['all', 'All'], ['short', 'Shorts'], ['long', 'Long form']] as const as [value, label] (value)}
+            <button
+              type="button"
+              class="segment"
+              class:active={lengthFilter === value}
+              aria-pressed={lengthFilter === value}
+              onclick={() => { setLengthFilter(value); }}
+            >{label}</button>
+          {/each}
+        </div>
         <button
           type="button"
-          class="filter-toggle"
-          class:active={showShorts}
-          aria-pressed={showShorts}
-          disabled={showShorts && !showLongForm}
-          onclick={() => { setShortsVisible(!showShorts); }}
-        >
-          Shorts
-        </button>
-        <button
-          type="button"
-          class="filter-toggle"
-          class:active={showLongForm}
-          aria-pressed={showLongForm}
-          disabled={showLongForm && !showShorts}
-          onclick={() => { setLongFormVisible(!showLongForm); }}
-        >
-          Long form
-        </button>
-        <button
-          type="button"
-          class="filter-toggle"
+          class="nsfw-toggle"
           class:active={showNsfw}
           aria-pressed={showNsfw}
-          title="Show #nsfw videos"
+          aria-label="Show NSFW videos"
+          title={showNsfw ? '#nsfw videos are showing' : '#nsfw videos are hidden'}
           onclick={() => { setNsfwVisible(!showNsfw); }}
         >
-          NSFW
+          NSFW {showNsfw ? 'on' : 'off'}
         </button>
       </div>
     </header>
     {#if videos.length === 0 && !loading}
-      <div class="p-4 text-text-muted text-sm">
-        {#if activeHashtag !== null}
-          No videos match #{activeHashtag} yet.
-          <button type="button" class="inline-clear" onclick={clearHashtagFilter}>Clear filter</button>
-        {:else}
-          No videos match the active filters
-        {/if}
+      <div class="empty-state" data-movie-empty>
+        <p class="empty-title">
+          {#if activeHashtag !== null}
+            No {lengthFilter === 'short' ? 'shorts' : lengthFilter === 'long' ? 'long form videos' : 'videos'} tagged #{activeHashtag}
+          {:else}
+            No {lengthFilter === 'short' ? 'shorts' : lengthFilter === 'long' ? 'long form videos' : 'videos'} to show
+          {/if}
+        </p>
+        <div class="empty-actions">
+          {#if lengthFilter !== 'all'}
+            <button type="button" class="empty-action" onclick={() => { setLengthFilter('all'); }}>Show all lengths</button>
+          {/if}
+          {#if activeHashtag !== null}
+            <button type="button" class="empty-action" onclick={clearHashtagFilter}>Clear #{activeHashtag}</button>
+          {/if}
+        </div>
       </div>
     {/if}
     <div class="movie-grid">
-      {#each renderedVideos as video, index (video.id)}
+      {#each renderedVideos as video, index (videoAddress(video))}
+        {@const address = videoAddress(video)}
         <VideoCard
           {video}
           profile={profiles.get(video.pubkey)}
           activeHashtag={activeHashtag}
-          active={activeVideoId === video.id}
-          playbackState={activeVideoId === video.id ? runtimeState : null}
-          error={runtimeErrorVideoId === video.id}
+          active={activeVideoId === address}
+          playbackState={activeVideoId === address ? runtimeState : null}
+          error={runtimeErrorVideoId === address}
           disabled={requestInFlight}
           thumbnailVisible={index >= thumbnailWindowStart && index < thumbnailWindowEnd}
           onselect={() => { void selectVideo(video); }}
           onhashtag={toggleHashtag}
+          onauthor={openAuthor}
         />
       {/each}
     </div>
@@ -617,8 +646,8 @@
         {wantsLongFormSearch() ? 'Searching for long form videos...' : 'Loading more videos...'}
       {/if}
     </div>
-  {:else if allVideos.length > 0}
-    <div class="load-more-sentinel text-text-muted">End of results</div>
+  {:else if videos.length > 0}
+    <div class="load-more-sentinel end-of-results">That's everything we found</div>
   {/if}
 </div>
 
@@ -628,9 +657,10 @@
     top: 0;
     z-index: 5;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 8px 12px;
     padding: 10px 14px;
     background: color-mix(in srgb, var(--hg-bg-base, #050505) 88%, transparent);
     backdrop-filter: blur(8px);
@@ -639,10 +669,10 @@
 
   .header-info {
     display: flex;
+    flex: 1 1 240px;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     min-width: 0;
-    overflow: hidden;
   }
 
   .video-count {
@@ -652,12 +682,15 @@
     color: var(--hg-text-primary, #f2efe7);
   }
 
+  /* Scrolls rather than clips, so every topic stays reachable in a narrow window. */
   .hashtags {
     display: flex;
     flex-wrap: nowrap;
-    gap: 6px;
-    overflow: hidden;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
     min-width: 0;
+    padding: 2px;
   }
 
   .hashtag {
@@ -668,7 +701,7 @@
     white-space: nowrap;
     background: transparent;
     border: none;
-    padding: 2px 4px;
+    padding: 3px 6px;
     border-radius: 4px;
     cursor: pointer;
     transition: color 120ms ease, background 120ms ease;
@@ -680,8 +713,8 @@
   }
 
   .hashtag.active {
-    color: var(--hg-accent-primary, #5d5dff);
-    background: color-mix(in srgb, var(--hg-accent-primary, #5d5dff) 18%, transparent);
+    color: var(--hg-text-primary, #f2efe7);
+    background: color-mix(in srgb, var(--hg-accent-primary, #5d5dff) 28%, transparent);
   }
 
   .clear-filter {
@@ -689,74 +722,176 @@
     font: inherit;
     font-size: 11px;
     white-space: nowrap;
-    color: var(--hg-text-primary, #f2efe7);
-    background: color-mix(in srgb, var(--hg-accent-primary, #5d5dff) 22%, transparent);
-    border: 1px solid color-mix(in srgb, var(--hg-accent-primary, #5d5dff) 50%, transparent);
-    border-radius: 999px;
-    padding: 3px 10px;
+    color: var(--hg-text-muted, #b8b1a4);
+    background: none;
+    border: none;
+    padding: 3px 4px;
+    text-decoration: underline;
     cursor: pointer;
   }
 
   .clear-filter:hover {
-    background: color-mix(in srgb, var(--hg-accent-primary, #5d5dff) 34%, transparent);
-  }
-
-  .inline-clear {
-    font: inherit;
-    color: var(--hg-accent-primary, #5d5dff);
-    background: none;
-    border: none;
-    padding: 0;
-    margin-left: 4px;
-    cursor: pointer;
-    text-decoration: underline;
+    color: var(--hg-text-primary, #f2efe7);
   }
 
   .header-toggles {
     flex: none;
     display: flex;
-    gap: 6px;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .segmented {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--hg-text-muted, #b8b1a4) 12%, transparent);
+  }
+
+  .segment {
+    font: inherit;
+    font-size: 12px;
+    padding: 3px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--hg-text-muted, #b8b1a4);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+
+  .segment:hover {
+    color: var(--hg-text-primary, #f2efe7);
+  }
+
+  .segment.active {
+    color: var(--hg-text-primary, #f2efe7);
+    background: color-mix(in srgb, var(--hg-accent-primary, #5d5dff) 38%, transparent);
+    font-weight: 600;
+  }
+
+  .nsfw-toggle {
+    font: inherit;
+    font-size: 11px;
+    padding: 4px 8px;
+    border: 1px solid color-mix(in srgb, var(--hg-text-muted, #b8b1a4) 22%, transparent);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--hg-text-muted, #b8b1a4);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .nsfw-toggle:hover {
+    color: var(--hg-text-primary, #f2efe7);
+  }
+
+  .nsfw-toggle.active {
+    color: var(--hg-text-primary, #f2efe7);
+    border-color: var(--hg-accent-primary, #5d5dff);
+  }
+
+  .hashtag:focus-visible,
+  .clear-filter:focus-visible,
+  .segment:focus-visible,
+  .nsfw-toggle:focus-visible,
+  .empty-action:focus-visible {
+    outline: 2px solid var(--hg-accent-primary, #5d5dff);
+    outline-offset: 1px;
   }
 
   .movie-grid {
     --movie-card-min: clamp(320px, max(27vw, 31vh), 640px);
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--movie-card-min)), 1fr));
-    gap: 16px;
+    gap: 20px 16px;
     padding: 14px;
   }
 
-  .filter-toggle {
-    border: 1px solid color-mix(in srgb, var(--hg-text-muted, #b8b1a4) 22%, transparent);
-    border-radius: 999px;
-    background: transparent;
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 72px 24px;
+    text-align: center;
+  }
+
+  .empty-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--hg-text-primary, #f2efe7);
+  }
+
+  .empty-copy {
+    margin: 0;
+    max-width: 44ch;
+    font-size: 13px;
     color: var(--hg-text-muted, #b8b1a4);
+  }
+
+  .empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .empty-action {
     font: inherit;
     font-size: 12px;
-    padding: 4px 12px;
+    padding: 5px 12px;
+    border: 1px solid color-mix(in srgb, var(--hg-text-muted, #b8b1a4) 30%, transparent);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--hg-text-primary, #f2efe7);
     cursor: pointer;
-    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
   }
 
-  .filter-toggle:hover {
-    color: var(--hg-text-primary, #f2efe7);
-    border-color: color-mix(in srgb, var(--hg-accent-primary, #5d5dff) 50%, transparent);
-  }
-
-  .filter-toggle.active {
+  .empty-action:hover {
     border-color: var(--hg-accent-primary, #5d5dff);
-    color: var(--hg-text-primary, #f2efe7);
-    background: color-mix(in srgb, var(--hg-accent-primary, #5d5dff) 22%, transparent);
   }
 
-  /* The lone active toggle can't be turned off — show it as locked-on. */
-  .filter-toggle:disabled {
-    cursor: default;
+  .skeleton-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
 
-  .filter-toggle:disabled:hover {
-    border-color: var(--hg-accent-primary, #5d5dff);
-    color: var(--hg-text-primary, #f2efe7);
+  .skeleton-thumb,
+  .skeleton-line {
+    background: color-mix(in srgb, var(--hg-text-muted, #b8b1a4) 12%, transparent);
+    animation: skeleton-pulse 1.4s ease-in-out infinite;
+  }
+
+  .skeleton-thumb {
+    aspect-ratio: 16 / 9;
+  }
+
+  .skeleton-line {
+    height: 10px;
+    width: 40%;
+    margin-inline: 8px;
+    border-radius: 3px;
+  }
+
+  .skeleton-line.wide {
+    width: 70%;
+  }
+
+  @keyframes skeleton-pulse {
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-thumb,
+    .skeleton-line {
+      animation: none;
+    }
   }
 
   .load-more-sentinel {
@@ -765,5 +900,10 @@
     text-align: center;
     color: var(--hg-text-muted, #b8b1a4);
     font-size: 12px;
+  }
+
+  .end-of-results {
+    min-height: 0;
+    opacity: 0.7;
   }
 </style>
